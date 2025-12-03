@@ -199,8 +199,8 @@ jobs:
 
           echo "Generated metrics.influx:"
           printf "%s\n" "$LINE" > metrics.influx
-          dos2unix metrics.influx || true
-          cat -A metrics.influx
+          echo "Generated metrics.influx:"
+          cat -v metrics.influx
 
           # Push to InfluxDB Cloud
           WRITE_URL="${INFLUX_URL%/}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=s"
