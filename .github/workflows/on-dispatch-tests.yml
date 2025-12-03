@@ -152,29 +152,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Skip if missing secrets
-          if [ -z "${INFLUX_URL:-}" ] || [ -z "${INFLUX_ORG:-}" ] || \
-            [ -z "${INFLUX_BUCKET:-}" ] || [ -z "${INFLUX_TOKEN:-}" ]; then
-            echo "InfluxDB configuration missing. Skipping."
+          # Skip if InfluxDB secrets are not configured
+          if [ -z "${INFLUX_URL:-}" ] || [ -z "${INFLUX_ORG:-}" ] || [ -z "${INFLUX_BUCKET:-}" ] || [ -z "${INFLUX_TOKEN:-}" ]; then
+            echo "InfluxDB URL / org / bucket / token not set. Skipping metrics push."
             exit 0
           fi
 
-          # Install jq if missing
+          # Ensure jq is available
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update
             sudo apt-get install -y jq
           fi
 
+          # Check Allure summary
           if [ ! -f "allure-report/widgets/summary.json" ]; then
-            echo "summary.json not found. Skipping metrics push."
+            echo "Allure summary.json not found. Skipping metrics push."
             exit 0
           fi
 
-          PASSED=$(jq -r '.statistic.passed  // 0' allure-report/widgets/summary.json)
-          FAILED=$(jq -r '.statistic.failed  // 0' allure-report/widgets/summary.json)
-          BROKEN=$(jq -r '.statistic.broken  // 0' allure-report/widgets/summary.json)
-          SKIPPED=$(jq -r '.statistic.skipped // 0' allure-report/widgets/summary.json)
-          UNKNOWN=$(jq -r '.statistic.unknown // 0' allure-report/widgets/summary.json)
+          # Extract metrics
+          PASSED=$(jq -r '.statistic.passed  // 0'   allure-report/widgets/summary.json)
+          FAILED=$(jq -r '.statistic.failed  // 0'   allure-report/widgets/summary.json)
+          BROKEN=$(jq -r '.statistic.broken  // 0'   allure-report/widgets/summary.json)
+          SKIPPED=$(jq -r '.statistic.skipped // 0'  allure-report/widgets/summary.json)
+          UNKNOWN=$(jq -r '.statistic.unknown // 0'  allure-report/widgets/summary.json)
           TOTAL=$(jq -r '
             if (.statistic.total? // null) != null
             then .statistic.total
@@ -185,26 +186,30 @@ jobs:
           ' allure-report/widgets/summary.json)
           DURATION_MS=$(jq -r '.time.duration // 0' allure-report/widgets/summary.json)
 
-          PASS_RATE="0.00"
+          PASS_RATE=0
           if [ "$TOTAL" -gt 0 ]; then
             PASS_RATE=$(awk "BEGIN {printf \"%.2f\", ($PASSED*100)/$TOTAL}")
+            PASS_RATE="${PASS_RATE//,/\.}"  # ensure dot as decimal separator
           fi
 
           echo "Parsed metrics -> total=$TOTAL passed=$PASSED failed=$FAILED broken=$BROKEN skipped=$SKIPPED unknown=$UNKNOWN duration_ms=$DURATION_MS pass_rate=$PASS_RATE"
 
-          # Write clean, guaranteed-correct line protocol
-          printf "automation_tests,project=%s,env=%s,branch=%s total=%si,passed=%si,failed=%si,broken=%si,skipped=%si,unknown=%si,duration_ms=%si,pass_rate=%s\n" \
-            "$PROJECT_NAME" "$ENVIRONMENT" "$BRANCH_NAME" \
-            "$TOTAL" "$PASSED" "$FAILED" "$BROKEN" "$SKIPPED" "$UNKNOWN" "$DURATION_MS" "$PASS_RATE" \
-            > metrics.influx
+          # Build Influx line protocol
+          LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}"
 
-          echo "=== CLEAN LINE PROTOCOL ==="
+          # Clean line protocol: remove \r, trailing spaces, and ensure a single newline at the end
+          echo "$LINE" | tr -d '\r' | sed 's/[ \t]*$//' > metrics.influx
+          echo "" >> metrics.influx  # append newline
+
+          echo "=== FINAL LINE PROTOCOL ==="
           cat -v metrics.influx
 
+          # Push to InfluxDB
           WRITE_URL="${INFLUX_URL%/}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=s"
 
           HTTP_CODE=$(curl -s -o /tmp/influx_resp.txt -w "%{http_code}" \
             -H "Authorization: Token ${INFLUX_TOKEN}" \
+            -H "Content-Type: text/plain; charset=utf-8" \
             --data-binary @metrics.influx \
             "${WRITE_URL}" || true)
 
