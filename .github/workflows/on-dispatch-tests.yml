@@ -195,6 +195,8 @@ jobs:
           # measurement: automation_tests
           # tags: project, env, branch
           # fields: totals, duration_ms, pass_rate
+          PASS_RATE=$(awk "BEGIN {printf \"%.2f\", ($PASSED*100)/$TOTAL}")
+          PASS_RATE="${PASS_RATE//,/\.}"  # ensure dot as decimal separator
           LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}"
 
           echo "Generated metrics.influx:"
