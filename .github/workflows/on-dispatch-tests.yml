@@ -11,9 +11,9 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      CALC_URL: ${{ github.event.client_payload.calc_url || vars.CALC_URL || secrets.CALC_URL || 'https://jmiguelcheq.github.io/calculator-demo' }}
+      CALC_URL: ${{ github.event.client_payload.calc_url || vars.CALC_URL || secrets.CALC_URL || 'https://vonwebsterlabajo.github.io/calculator-demo-with-grafana/' }}
       HEADLESS: "true"
-      PROJECT_NAME: calculator-demo
+      PROJECT_NAME: calculator-demo-with-grafana
       ENV: ${{ github.event.client_payload.env || vars.ENV || 'staging' }}
       MODE: ${{ github.event.client_payload.mode || 'staging-smoke' }}
 
@@ -22,7 +22,7 @@ jobs:
         if: ${{ github.event_name == 'repository_dispatch' }}
         run: |
           SRC="${{ github.event.client_payload.source_repo }}"
-          EXPECTED="jmiguelcheq/calculator-demo"
+          EXPECTED="VonWebsterLabajo/calculator-demo-with-grafana"
           if [ "$SRC" != "$EXPECTED" ]; then
             echo "Unexpected sender: $SRC"
             exit 1
