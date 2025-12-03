@@ -194,12 +194,12 @@ jobs:
 
           echo "Parsed metrics -> total=$TOTAL passed=$PASSED failed=$FAILED broken=$BROKEN skipped=$SKIPPED unknown=$UNKNOWN duration_ms=$DURATION_MS pass_rate=$PASS_RATE"
 
-          # Build line protocol
-          LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}f"
+          # Build Influx line protocol
+          LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}"
 
-          # Remove any empty lines
+          # Clean line protocol: remove \r, trailing spaces, and ensure a single newline at the end
           echo "$LINE" | tr -d '\r' | sed 's/[ \t]*$//' > metrics.influx
-          sed -i '/^\s*$/d' metrics.influx
+          echo "" >> metrics.influx  # append newline
 
           echo "=== FINAL LINE PROTOCOL ==="
           cat -v metrics.influx
