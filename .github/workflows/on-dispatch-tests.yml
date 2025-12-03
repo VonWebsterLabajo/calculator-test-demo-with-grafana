@@ -55,7 +55,7 @@ jobs:
         if: ${{ github.event_name == 'repository_dispatch' && env.MODE == 'pr' }}
         uses: actions/checkout@v4
         with:
-          repository: jmiguelcheq/calculator-demo
+          repository: VonWebsterLabajo/calculator-demo-with-grafana
           ref: ${{ github.event.client_payload.sha }}
           path: app
           # token: ${{ secrets.CI_PAT }}   # if the app repo is private
