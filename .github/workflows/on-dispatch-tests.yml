@@ -201,7 +201,18 @@ jobs:
 
           echo "Generated metrics.influx:"
           printf "%s\n" "$LINE" > metrics.influx
-          echo "Generated metrics.influx:"
+          
+          echo "=== VISIBLE CHARACTERS CHECK ==="
+          cat -v metrics.influx
+
+          echo "=== BINARY CHECK ==="
+          xxd metrics.influx
+
+          echo "=== NORMALIZING FILE ==="
+          tr -d '\r' < metrics.influx | sed 's/[ \t]*$//' > metrics.cleaned
+          mv metrics.cleaned metrics.influx
+
+          echo "=== AFTER CLEANING ==="
           cat -v metrics.influx
 
           # Push to InfluxDB Cloud
@@ -210,7 +221,7 @@ jobs:
           HTTP_CODE=$(curl -s -o /tmp/influx_resp.txt -w "%{http_code}" \
             -H "Authorization: Token ${INFLUX_TOKEN}" \
             -H "Content-Type: text/plain; charset=utf-8" \
-            --data-binary @metrics.influx \
+            --data-binary "$(cat metrics.influx)" \
             "${WRITE_URL}" || true)
 
           echo "InfluxDB push HTTP code: ${HTTP_CODE}"
