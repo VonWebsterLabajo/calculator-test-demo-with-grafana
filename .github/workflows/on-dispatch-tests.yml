@@ -138,7 +138,7 @@ jobs:
           path: target/allure-single
 
       # # ---------- Push summary metrics to InfluxDB Cloud ----------
-      - name: Push test metrics to InfluxDB Cloud
+      # - name: Push test metrics to InfluxDB Cloud
         if: ${{ always() }}
         env:
           INFLUX_URL: ${{ secrets.INFLUX_URL }}
@@ -224,80 +224,80 @@ jobs:
           fi
 
       # ---------- Push summary metrics to Grafana  ----------
-      # - name: Push test metrics to Grafana Prometheus
-      #   if: ${{ always() }}
-      #   env:
-      #     GRAFANA_PROM_URL: ${{ secrets.GRAFANA_PROM_URL }}
-      #     GRAFANA_PROM_USER: ${{ secrets.GRAFANA_PROM_USER }}
-      #     GRAFANA_PROM_API_KEY: ${{ secrets.GRAFANA_PROM_API_KEY }}
-      #     PROJECT_NAME: ${{ env.PROJECT_NAME }}
-      #     ENVIRONMENT: ${{ env.ENV }}
-      #     BRANCH_NAME: ${{ github.ref_name }}
-      #   shell: bash
-      #   run: |
-      #     set -euo pipefail
+      - name: Push test metrics to Grafana Prometheus
+        if: ${{ always() }}
+        env:
+          GRAFANA_PROM_URL: ${{ secrets.GRAFANA_PROM_URL }}
+          GRAFANA_PROM_USER: ${{ secrets.GRAFANA_PROM_USER }}
+          GRAFANA_PROM_API_KEY: ${{ secrets.GRAFANA_PROM_API_KEY }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          ENVIRONMENT: ${{ env.ENV }}
+          BRANCH_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      #     # Skip if Grafana/Influx secrets are not configured
-      #     if [ -z "${GRAFANA_PROM_URL:-}" ] || [ -z "${GRAFANA_PROM_USER:-}" ] || [ -z "${GRAFANA_PROM_API_KEY:-}" ]; then
-      #       echo "Grafana Influx URL / credentials not set. Skipping metrics push."
-      #       exit 0
-      #     fi
+          # Skip if Grafana/Influx secrets are not configured
+          if [ -z "${GRAFANA_PROM_URL:-}" ] || [ -z "${GRAFANA_PROM_USER:-}" ] || [ -z "${GRAFANA_PROM_API_KEY:-}" ]; then
+            echo "Grafana Influx URL / credentials not set. Skipping metrics push."
+            exit 0
+          fi
 
-      #     # Ensure jq is available
-      #     if ! command -v jq >/dev/null 2>&1; then
-      #       sudo apt-get update
-      #       sudo apt-get install -y jq
-      #     fi
+          # Ensure jq is available
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
 
-      #     if [ ! -f "allure-report/widgets/summary.json" ]; then
-      #       echo "Allure summary.json not found. Skipping metrics push."
-      #       exit 0
-      #     fi
+          if [ ! -f "allure-report/widgets/summary.json" ]; then
+            echo "Allure summary.json not found. Skipping metrics push."
+            exit 0
+          fi
 
-      #     PASSED=$(jq -r '.statistic.passed  // 0'   allure-report/widgets/summary.json)
-      #     FAILED=$(jq -r '.statistic.failed  // 0'   allure-report/widgets/summary.json)
-      #     BROKEN=$(jq -r '.statistic.broken  // 0'   allure-report/widgets/summary.json)
-      #     SKIPPED=$(jq -r '.statistic.skipped // 0'  allure-report/widgets/summary.json)
-      #     UNKNOWN=$(jq -r '.statistic.unknown // 0'  allure-report/widgets/summary.json)
-      #     TOTAL=$(jq -r '
-      #       if (.statistic.total? // null) != null
-      #       then .statistic.total
-      #       else (.statistic.passed // 0) + (.statistic.failed // 0) +
-      #            (.statistic.broken // 0) + (.statistic.skipped // 0) +
-      #            (.statistic.unknown // 0)
-      #       end
-      #     ' allure-report/widgets/summary.json)
-      #     DURATION_MS=$(jq -r '.time.duration // 0' allure-report/widgets/summary.json)
+          PASSED=$(jq -r '.statistic.passed  // 0'   allure-report/widgets/summary.json)
+          FAILED=$(jq -r '.statistic.failed  // 0'   allure-report/widgets/summary.json)
+          BROKEN=$(jq -r '.statistic.broken  // 0'   allure-report/widgets/summary.json)
+          SKIPPED=$(jq -r '.statistic.skipped // 0'  allure-report/widgets/summary.json)
+          UNKNOWN=$(jq -r '.statistic.unknown // 0'  allure-report/widgets/summary.json)
+          TOTAL=$(jq -r '
+            if (.statistic.total? // null) != null
+            then .statistic.total
+            else (.statistic.passed // 0) + (.statistic.failed // 0) +
+                 (.statistic.broken // 0) + (.statistic.skipped // 0) +
+                 (.statistic.unknown // 0)
+            end
+          ' allure-report/widgets/summary.json)
+          DURATION_MS=$(jq -r '.time.duration // 0' allure-report/widgets/summary.json)
 
-      #     PASS_RATE=0
-      #     if [ "$TOTAL" -gt 0 ]; then
-      #       PASS_RATE=$(awk "BEGIN {printf \"%.2f\", ($PASSED*100)/$TOTAL}")
-      #     fi
+          PASS_RATE=0
+          if [ "$TOTAL" -gt 0 ]; then
+            PASS_RATE=$(awk "BEGIN {printf \"%.2f\", ($PASSED*100)/$TOTAL}")
+          fi
 
-      #     echo "Parsed metrics -> total=$TOTAL passed=$PASSED failed=$FAILED broken=$BROKEN skipped=$SKIPPED unknown=$UNKNOWN duration_ms=$DURATION_MS pass_rate=$PASS_RATE"
+          echo "Parsed metrics -> total=$TOTAL passed=$PASSED failed=$FAILED broken=$BROKEN skipped=$SKIPPED unknown=$UNKNOWN duration_ms=$DURATION_MS pass_rate=$PASS_RATE"
 
-      #     # Build Influx line protocol:
-      #     # measurement: automation_tests
-      #     # tags: project, env, branch
-      #     # fields: totals, duration_ms, pass_rate
-      #     LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}"
+          # Build Influx line protocol:
+          # measurement: automation_tests
+          # tags: project, env, branch
+          # fields: totals, duration_ms, pass_rate
+          LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}"
 
-      #     echo "Generated metrics.influx:"
-      #     echo "${LINE}" > metrics.influx
-      #     cat metrics.influx
+          echo "Generated metrics.influx:"
+          echo "${LINE}" > metrics.influx
+          cat metrics.influx
 
-      #     HTTP_CODE=$(curl -s -o /tmp/influx_resp.txt -w "%{http_code}" \
-      #       -u "${GRAFANA_PROM_USER}:${GRAFANA_PROM_API_KEY}" \
-      #       -H "Content-Type: text/plain" \
-      #       --data-binary @metrics.influx \
-      #       "${GRAFANA_PROM_URL}" || true)
+          HTTP_CODE=$(curl -s -o /tmp/influx_resp.txt -w "%{http_code}" \
+            -u "${GRAFANA_PROM_USER}:${GRAFANA_PROM_API_KEY}" \
+            -H "Content-Type: text/plain" \
+            --data-binary @metrics.influx \
+            "${GRAFANA_PROM_URL}" || true)
 
-      #     echo "Influx push HTTP code: ${HTTP_CODE}"
-      #     echo "Response body:"
-      #     cat /tmp/influx_resp.txt || echo "(empty)"
+          echo "Influx push HTTP code: ${HTTP_CODE}"
+          echo "Response body:"
+          cat /tmp/influx_resp.txt || echo "(empty)"
 
-      #     if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
-      #       echo "✅ Successfully pushed automation metrics to Grafana Cloud (Influx endpoint)"
-      #     else
-      #       echo "⚠️ Failed to push metrics to Grafana Cloud (not failing the job)."
-      #     fi
+          if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
+            echo "✅ Successfully pushed automation metrics to Grafana Cloud (Influx endpoint)"
+          else
+            echo "⚠️ Failed to push metrics to Grafana Cloud (not failing the job)."
+          fi
