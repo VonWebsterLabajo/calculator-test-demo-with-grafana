@@ -119,22 +119,12 @@ jobs:
         if: ${{ always() }}
         run: |
           mkdir -p out
+
           awk '{
             gsub(/"/, "\\\"");
-            print "{\"index\":{}}";
-            print "{\"@timestamp\":\""strftime("%Y-%m-%dT%H:%M:%SZ")"\",\"message\":\""$0"\"}";
-          }' logs_input/combined.log > out/logs.ndjson
-
-      - name: Convert logs to NDJSON for Elasticsearch
-        if: ${{ always() }}
-        run: |
-          mkdir -p out
-          awk '{
-            gsub(/"/, "\\\"");
-            print "{\"index\":{\"_index\":\"automation-logs\"}}";
-            print "{\"@timestamp\":\""strftime("%Y-%m-%dT%H:%M:%SZ")"\",\"message\":\""$0"\"}";
-          }' logs_input/combined.log > out/logs.ndjson
-
+            printf("{\"index\":{\"_index\":\"automation-logs\"}}\n");
+            printf("{\"@timestamp\":\"%s\",\"message\":\"%s\"}\n", strftime("%Y-%m-%dT%H:%M:%SZ"), $0);
+          }' logs/combined.log > out/logs.ndjson
 
       - name: Push logs to Elasticsearch
         if: ${{ always() }}
