@@ -1,345 +1,56 @@
-name: Run tests on repository_dispatch
+name: Selenium Test with Elastic Log Upload
 
 on:
-  repository_dispatch:
-    types: [ run-tests ]
   workflow_dispatch:
+  push:
+    branches: ["main"]
 
 jobs:
-  tests:
-    name: Cucumber + Allure tests
+  run-tests:
     runs-on: ubuntu-latest
 
-    env:
-      CALC_URL: ${{ github.event.client_payload.calc_url || vars.CALC_URL || secrets.CALC_URL || 'https://vonwebsterlabajo.github.io/calculator-demo-with-grafana-staging/' }}
-      HEADLESS: "true"
-      PROJECT_NAME: calculator-demo-with-grafana
-      ENV: ${{ github.event.client_payload.env || vars.ENV || 'staging' }}
-      MODE: ${{ github.event.client_payload.mode || 'staging-smoke' }}
-
     steps:
-      - name: Validate sender (only on repository_dispatch)
-        if: ${{ github.event_name == 'repository_dispatch' }}
-        run: |
-          SRC="${{ github.event.client_payload.source_repo }}"
-          EXPECTED="VonWebsterLabajo/calculator-demo-with-grafana"
-          if [ "$SRC" != "$EXPECTED" ]; then
-            echo "Unexpected sender: $SRC"
-            exit 1
-          fi
-
-      - name: Checkout testing repo (this repo)
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Temurin JDK 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
-          cache: maven
+          distribution: "temurin"
+          java-version: "21"
 
-      - name: Install Chrome (for UI tests)
+      - name: Set up Chrome
         uses: browser-actions/setup-chrome@v1
 
-      - name: Set up Node (for http-server & Allure)
-        uses: actions/setup-node@v4
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
         with:
-          node-version: "20"
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
 
-      - name: Install Allure CLI + http-server
-        run: |
-          npm i -g allure-commandline@2 http-server@14
+      - name: Run Tests
+        run: mvn clean test
 
-      # -------- PR mode: local app checkout + local server --------
-      - name: Checkout app repo at dispatched SHA (PR mode)
-        if: ${{ github.event_name == 'repository_dispatch' && env.MODE == 'pr' }}
-        uses: actions/checkout@v4
-        with:
-          repository: VonWebsterLabajo/calculator-demo-with-grafana
-          ref: ${{ github.event.client_payload.sha }}
-          path: app
-          # token: ${{ secrets.CI_PAT }}   # if the app repo is private
-
-      - name: Start local server (background, PR mode)
-        if: ${{ github.event_name == 'repository_dispatch' && env.MODE == 'pr' }}
-        working-directory: app/src
-        run: |
-          npx http-server -p 8080 -c-1 --silent &
-          echo $! > /tmp/http-server.pid
-          for i in {1..10}; do
-            curl -fsS http://127.0.0.1:8080 && break || sleep 1
-          done
-
-      - name: Decide BASE_URL
-        id: baseurl
-        run: |
-          if [ "${{ github.event_name }}" = "repository_dispatch" ] && [ "${MODE}" = "pr" ]; then
-            echo "BASE_URL=http://127.0.0.1:8080" >> "$GITHUB_OUTPUT"
-          else
-            echo "BASE_URL=${CALC_URL}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Show resolved test URL
-        run: echo "BASE_URL=${{ steps.baseurl.outputs.BASE_URL }}"
-
-      - name: Run Cucumber tests
+      - name: Upload Test Logs to Elastic Cloud
+        if: always()
         env:
-          BASE_URL: ${{ steps.baseurl.outputs.BASE_URL }}
-          ENV: ${{ env.ENV }}
+          ELASTIC_API_KEY: ${{ secrets.ELASTIC_API_KEY }}
+          ELASTIC_CLOUD_ID: ${{ secrets.ELASTIC_CLOUD_ID }}
         run: |
-          set -e
-          mvn -B clean test \
-            -DbaseUrl="${BASE_URL}" \
-            -Dheadless="${HEADLESS}"
+          LOG_FILE="target/logs/test.log"
 
-      - name: Stop local server (PR mode)
-        if: ${{ always() && github.event_name == 'repository_dispatch' && env.MODE == 'pr' }}
-        run: |
-          if [ -f /tmp/http-server.pid ]; then
-            kill "$(cat /tmp/http-server.pid)" || true
-          fi
+          if [ -f "$LOG_FILE" ]; then
+            echo "Uploading logs to Elastic..."
 
-      # ---------- Push logs to Elastic Cloud (Kibana) ----------
-      - name: Combine all log files
-        run: |
-          mkdir -p out
-          cat logs/*.log > out/combined.log
-          echo "Combined log created:"
-          ls -lh out/combined.log
+            while IFS= read -r line; do
+              curl -X POST "https://$ELASTIC_CLOUD_ID/api/logs" \
+                -H "Content-Type: application/json" \
+                -H "Authorization: ApiKey $ELASTIC_API_KEY" \
+                -d "{\"message\": \"$line\", \"timestamp\": \"$(date -u +"%Y-%m-%dT%H:%M:%SZ")\"}"
+            done < "$LOG_FILE"
 
-      - name: Convert combined log to NDJSON (Bulk format)
-        run: |
-          INDEX_NAME="calculator-logs"
-          > out/logs.ndjson
-
-          while IFS= read -r line; do
-            ESCAPED=$(printf '%s' "$line" | sed 's/"/\\"/g')
-            printf '{"index":{"_index":"%s"}}\n' "$INDEX_NAME" >> out/logs.ndjson
-            printf '{"message":"%s"}\n' "$ESCAPED" >> out/logs.ndjson
-          done < out/combined.log
-
-      - name: Upload to Elasticsearch (with pipeline)
-        env:
-          ELASTIC_URL: ${{ secrets.ELASTIC_URL }}
-          ELASTIC_USERNAME: ${{ secrets.ELASTIC_USERNAME }}
-          ELASTIC_PASSWORD: ${{ secrets.ELASTIC_PASSWORD }}
-        run: |
-          RESPONSE=$(curl -s -o response.json -w "%{http_code}" \
-            -X POST "$ELASTIC_URL/_bulk?pipeline=calculator-log-pipeline" \
-            -H "Content-Type: application/x-ndjson" \
-            --user "$ELASTIC_USERNAME:$ELASTIC_PASSWORD" \
-            --data-binary @out/logs.ndjson)
-
-          echo "HTTP response: $RESPONSE"
-
-          if [ "$RESPONSE" -ge 200 ] && [ "$RESPONSE" -lt 300 ]; then
-            echo "Logs successfully pushed to Elasticsearch using pipeline"
           else
-            echo "Failed to push logs. Elasticsearch response:"
-            cat response.json
-            exit 1
+            echo "Log file not found: $LOG_FILE"
           fi
-
-      # ---------- Reports & artifacts ----------
-      - name: Upload raw test reports (Surefire/Cucumber/Allure results)
-        if: ${{ failure() || success() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-reports
-          path: |
-            **/target/surefire-reports/**
-            **/target/cucumber-reports/**
-            **/target/allure-results/**
-
-      - name: Generate Allure HTML (folder)
-        if: ${{ always() }}
-        run: |
-          allure generate target/allure-results --clean -o allure-report
-          if [ -f allure-report/widgets/summary.json ]; then
-            echo "Allure summary found."
-          fi
-
-      - name: Upload Allure HTML (folder)
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: allure-html
-          path: allure-report
-
-      - name: Generate Allure single-file report
-        if: ${{ always() }}
-        run: |
-          allure generate target/allure-results --single-file --clean -o target/allure-single
-
-      - name: Upload Allure single-file report
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: allure-single-file
-          path: target/allure-single
-
-      # # ---------- Push summary metrics to InfluxDB Cloud ----------
-      # - name: Push test metrics to InfluxDB Cloud
-      #   if: ${{ always() }}
-      #   env:
-      #     INFLUX_URL: ${{ secrets.INFLUX_URL }}
-      #     INFLUX_ORG: ${{ secrets.INFLUX_ORG }}
-      #     INFLUX_BUCKET: ${{ secrets.INFLUX_BUCKET }}
-      #     INFLUX_TOKEN: ${{ secrets.INFLUX_TOKEN }}
-      #     PROJECT_NAME: ${{ env.PROJECT_NAME }}
-      #     ENVIRONMENT: ${{ env.ENV }}
-      #     BRANCH_NAME: ${{ github.ref_name }}
-      #   shell: bash
-      #   run: |
-      #     set -euo pipefail
-
-      #     # Skip if InfluxDB secrets are not configured
-      #     if [ -z "${INFLUX_URL:-}" ] || [ -z "${INFLUX_ORG:-}" ] || [ -z "${INFLUX_BUCKET:-}" ] || [ -z "${INFLUX_TOKEN:-}" ]; then
-      #       echo "InfluxDB URL / org / bucket / token not set. Skipping metrics push."
-      #       exit 0
-      #     fi
-
-      #     # Ensure jq is available
-      #     if ! command -v jq >/dev/null 2>&1; then
-      #       sudo apt-get update
-      #       sudo apt-get install -y jq
-      #     fi
-
-      #     # Check Allure summary
-      #     if [ ! -f "allure-report/widgets/summary.json" ]; then
-      #       echo "Allure summary.json not found. Skipping metrics push."
-      #       exit 0
-      #     fi
-
-      #     # Extract metrics
-      #     PASSED=$(jq -r '.statistic.passed  // 0'   allure-report/widgets/summary.json)
-      #     FAILED=$(jq -r '.statistic.failed  // 0'   allure-report/widgets/summary.json)
-      #     BROKEN=$(jq -r '.statistic.broken  // 0'   allure-report/widgets/summary.json)
-      #     SKIPPED=$(jq -r '.statistic.skipped // 0'  allure-report/widgets/summary.json)
-      #     UNKNOWN=$(jq -r '.statistic.unknown // 0'  allure-report/widgets/summary.json)
-      #     TOTAL=$(jq -r '
-      #       if (.statistic.total? // null) != null
-      #       then .statistic.total
-      #       else (.statistic.passed // 0) + (.statistic.failed // 0) +
-      #           (.statistic.broken // 0) + (.statistic.skipped // 0) +
-      #           (.statistic.unknown // 0)
-      #       end
-      #     ' allure-report/widgets/summary.json)
-      #     DURATION_MS=$(jq -r '.time.duration // 0' allure-report/widgets/summary.json)
-
-      #     PASS_RATE=0
-      #     if [ "$TOTAL" -gt 0 ]; then
-      #       PASS_RATE=$(awk "BEGIN {printf \"%.2f\", ($PASSED*100)/$TOTAL}")
-      #       PASS_RATE="${PASS_RATE//,/\.}"  # ensure dot as decimal separator
-      #     fi
-
-      #     echo "Parsed metrics -> total=$TOTAL passed=$PASSED failed=$FAILED broken=$BROKEN skipped=$SKIPPED unknown=$UNKNOWN duration_ms=$DURATION_MS pass_rate=$PASS_RATE"
-
-      #     # Build Influx line protocol
-      #     LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}"
-
-      #     # Clean line protocol: remove \r, trailing spaces, and ensure a single newline at the end
-      #     echo "$LINE" | tr -d '\r' | sed 's/[ \t]*$//' > metrics.influx
-      #     echo "" >> metrics.influx  # append newline
-
-      #     echo "=== FINAL LINE PROTOCOL ==="
-      #     cat -v metrics.influx
-
-      #     # Push to InfluxDB
-      #     WRITE_URL="${INFLUX_URL%/}/api/v2/write?org=${INFLUX_ORG}&bucket=${INFLUX_BUCKET}&precision=s"
-
-      #     HTTP_CODE=$(curl -s -o /tmp/influx_resp.txt -w "%{http_code}" \
-      #       -H "Authorization: Token ${INFLUX_TOKEN}" \
-      #       -H "Content-Type: text/plain; charset=utf-8" \
-      #       --data-binary @metrics.influx \
-      #       "${WRITE_URL}" || true)
-
-      #     echo "InfluxDB push HTTP code: ${HTTP_CODE}"
-      #     echo "Response body:"
-      #     cat /tmp/influx_resp.txt || echo "(empty)"
-
-      #     if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
-      #       echo "✅ Successfully pushed automation metrics to InfluxDB Cloud"
-      #     else
-      #       echo "⚠️ Failed to push metrics to InfluxDB Cloud (not failing the job)."
-      #     fi
-
-      # ---------- Push summary metrics to Grafana  ----------
-      # - name: Push test metrics to Grafana Prometheus
-      #   if: ${{ always() }}
-      #   env:
-      #     GRAFANA_PROM_URL: ${{ secrets.GRAFANA_PROM_URL }}
-      #     GRAFANA_PROM_USER: ${{ secrets.GRAFANA_PROM_USER }}
-      #     GRAFANA_PROM_API_KEY: ${{ secrets.GRAFANA_PROM_API_KEY }}
-      #     PROJECT_NAME: ${{ env.PROJECT_NAME }}
-      #     ENVIRONMENT: ${{ env.ENV }}
-      #     BRANCH_NAME: ${{ github.ref_name }}
-      #   shell: bash
-      #   run: |
-      #     set -euo pipefail
-
-      #     # Skip if Grafana/Influx secrets are not configured
-      #     if [ -z "${GRAFANA_PROM_URL:-}" ] || [ -z "${GRAFANA_PROM_USER:-}" ] || [ -z "${GRAFANA_PROM_API_KEY:-}" ]; then
-      #       echo "Grafana Influx URL / credentials not set. Skipping metrics push."
-      #       exit 0
-      #     fi
-
-      #     # Ensure jq is available
-      #     if ! command -v jq >/dev/null 2>&1; then
-      #       sudo apt-get update
-      #       sudo apt-get install -y jq
-      #     fi
-
-      #     if [ ! -f "allure-report/widgets/summary.json" ]; then
-      #       echo "Allure summary.json not found. Skipping metrics push."
-      #       exit 0
-      #     fi
-
-      #     PASSED=$(jq -r '.statistic.passed  // 0'   allure-report/widgets/summary.json)
-      #     FAILED=$(jq -r '.statistic.failed  // 0'   allure-report/widgets/summary.json)
-      #     BROKEN=$(jq -r '.statistic.broken  // 0'   allure-report/widgets/summary.json)
-      #     SKIPPED=$(jq -r '.statistic.skipped // 0'  allure-report/widgets/summary.json)
-      #     UNKNOWN=$(jq -r '.statistic.unknown // 0'  allure-report/widgets/summary.json)
-      #     TOTAL=$(jq -r '
-      #       if (.statistic.total? // null) != null
-      #       then .statistic.total
-      #       else (.statistic.passed // 0) + (.statistic.failed // 0) +
-      #            (.statistic.broken // 0) + (.statistic.skipped // 0) +
-      #            (.statistic.unknown // 0)
-      #       end
-      #     ' allure-report/widgets/summary.json)
-      #     DURATION_MS=$(jq -r '.time.duration // 0' allure-report/widgets/summary.json)
-
-      #     PASS_RATE=0
-      #     if [ "$TOTAL" -gt 0 ]; then
-      #       PASS_RATE=$(awk "BEGIN {printf \"%.2f\", ($PASSED*100)/$TOTAL}")
-      #     fi
-
-      #     echo "Parsed metrics -> total=$TOTAL passed=$PASSED failed=$FAILED broken=$BROKEN skipped=$SKIPPED unknown=$UNKNOWN duration_ms=$DURATION_MS pass_rate=$PASS_RATE"
-
-      #     # Build Influx line protocol:
-      #     # measurement: automation_tests
-      #     # tags: project, env, branch
-      #     # fields: totals, duration_ms, pass_rate
-      #     LINE="automation_tests,project=${PROJECT_NAME},env=${ENVIRONMENT},branch=${BRANCH_NAME} total=${TOTAL}i,passed=${PASSED}i,failed=${FAILED}i,broken=${BROKEN}i,skipped=${SKIPPED}i,unknown=${UNKNOWN}i,duration_ms=${DURATION_MS}i,pass_rate=${PASS_RATE}"
-
-      #     echo "Generated metrics.influx:"
-      #     echo "${LINE}" > metrics.influx
-      #     cat metrics.influx
-
-      #     HTTP_CODE=$(curl -s -o /tmp/influx_resp.txt -w "%{http_code}" \
-      #       -u "${GRAFANA_PROM_USER}:${GRAFANA_PROM_API_KEY}" \
-      #       -H "Content-Type: text/plain" \
-      #       --data-binary @metrics.influx \
-      #       "${GRAFANA_PROM_URL}" || true)
-
-      #     echo "Influx push HTTP code: ${HTTP_CODE}"
-      #     echo "Response body:"
-      #     cat /tmp/influx_resp.txt || echo "(empty)"
-
-      #     if [ "${HTTP_CODE}" -ge 200 ] && [ "${HTTP_CODE}" -lt 300 ]; then
-      #       echo "✅ Successfully pushed automation metrics to Grafana Cloud (Influx endpoint)"
-      #     else
-      #       echo "⚠️ Failed to push metrics to Grafana Cloud (not failing the job)."
-      #     fi
-
